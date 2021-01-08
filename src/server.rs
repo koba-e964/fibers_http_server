@@ -165,21 +165,10 @@ impl Server {
     pub fn local_addr(self) -> impl Future<Item = (Self, SocketAddr), Error = Error> {
         match self.listener {
             Listener::Listening { .. } => match self.listener.local_addr() {
-                Ok(local_addr) => Either::A(ok((self, local_addr))),
-                Err(e) => Either::A(futures::future::err(Error::from(e))),
+                Ok(local_addr) => ok((self, local_addr)),
+                Err(e) => futures::future::err(Error::from(e)),
             },
-            Listener::Binding(_, _) => {
-                let future = loop_fn(self, |mut this| {
-                    track!(this.listener.poll())?;
-                    if let Listener::Listening { .. } = this.listener {
-                        let local_addr = this.listener.local_addr()?;
-                        Ok(Loop::Break((this, local_addr)))
-                    } else {
-                        Ok(Loop::Continue(this))
-                    }
-                });
-                Either::B(future)
-            }
+            Listener::Binding(_, local_addr) => ok((self, local_addr)),
         }
     }
 
