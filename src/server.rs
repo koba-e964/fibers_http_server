@@ -1,10 +1,9 @@
+use crate::connection::Connection;
 use crate::dispatcher::{Dispatcher, DispatcherBuilder};
 use crate::metrics::ServerMetrics;
-use crate::{connection::Connection, error};
 use crate::{Error, HandleRequest, HandlerOptions, Result};
 use core::task::{Context, Poll as Poll03};
 use factory::Factory;
-use fibers::net::futures::{Connected, TcpListenerBind};
 use fibers::{self, BoxSpawn, Spawn};
 use futures::future::{loop_fn, ok, Either, Loop};
 use futures::{Async, Future, Poll, Stream};
@@ -171,10 +170,6 @@ impl Server {
             },
             Listener::Binding(_, _) => {
                 let future = loop_fn(self, |mut this| {
-                    if fibers::fiber::with_current_context(|_| ()).is_none() {
-                        return Ok(Loop::Continue(this));
-                    }
-
                     track!(this.listener.poll())?;
                     if let Listener::Listening { .. } = this.listener {
                         let local_addr = this.listener.local_addr()?;
@@ -276,7 +271,14 @@ impl Stream for Listener {
 
 impl std::fmt::Debug for Listener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        write!(
+            f,
+            "Listener {}",
+            match self {
+                Listener::Binding(..) => "Binding",
+                Listener::Listening(..) => "Listening",
+            }
+        )
     }
 }
 

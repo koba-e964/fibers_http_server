@@ -7,20 +7,23 @@ use crate::{Error, Req, Result, Status};
 use bytecodec::combinator::MaybeEos;
 use bytecodec::io::{BufferedIo, IoDecodeExt, IoEncodeExt};
 use bytecodec::{Decode, DecodeExt, Encode};
-use fibers::net::TcpStream;
 use futures::{Async, Future, Poll};
 use httpcodec::{NoBodyDecoder, RequestDecoder};
 use slog::Logger;
-use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::{io::Read, mem};
+use std::{
+    io::Write,
+    sync::atomic::{AtomicBool, Ordering},
+};
+use tokio::net::TcpStream;
 use url::Url;
 
 #[derive(Debug)]
 pub struct Connection {
     logger: Logger,
     metrics: ServerMetrics,
-    stream: BufferedIo<TcpStream>,
+    stream: BufferedIo<ReadWriteWrapper>,
     req_head_decoder: MaybeEos<RequestDecoder<NoBodyDecoder>>,
     dispatcher: Dispatcher,
     is_server_alive: Arc<AtomicBool>,
@@ -50,7 +53,11 @@ impl Connection {
         Ok(Connection {
             logger,
             metrics,
-            stream: BufferedIo::new(stream, options.read_buffer_size, options.write_buffer_size),
+            stream: BufferedIo::new(
+                ReadWriteWrapper(stream),
+                options.read_buffer_size,
+                options.write_buffer_size,
+            ),
             req_head_decoder: req_head_decoder.maybe_eos(),
             dispatcher,
             is_server_alive,
@@ -230,5 +237,24 @@ impl Phase {
         } else {
             false
         }
+    }
+}
+
+#[derive(Debug)]
+struct ReadWriteWrapper(TcpStream);
+
+impl Read for ReadWriteWrapper {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.try_read(buf)
+    }
+}
+
+impl Write for ReadWriteWrapper {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.try_write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
