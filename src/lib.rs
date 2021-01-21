@@ -111,7 +111,8 @@ mod test {
         type Reply = Reply<Self::ResBody>;
 
         fn handle_request(&self, _req: Req<Self::ReqBody>) -> Self::Reply {
-            Box::new(ok(Res::new(Status::Ok, "hello".to_owned())))
+            let s = "h".repeat(1000);
+            Box::new(ok(Res::new(Status::Ok, s)))
         }
     }
 
@@ -143,5 +144,38 @@ mod test {
             &buf[..size],
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".as_ref()
         );
+    }
+
+    #[test]
+    fn can_handle_big_data() {
+        use fibers::{Executor, Spawn, ThreadPoolExecutor};
+        use futures::Future;
+
+        let mut exec = ThreadPoolExecutor::with_thread_count(10).unwrap();
+
+        let mut builder = ServerBuilder::new(([127, 0, 0, 1], 12342).into());
+        builder.write_buffer_size(100);
+        builder.add_handler(Hello).unwrap();
+        let server = builder.finish(exec.handle());
+        let (server, addr) = exec.run_future(server.local_addr()).unwrap().unwrap();
+        exec.spawn(server.map(|_x| ()).map_err(|_y| ()));
+        thread::sleep(Duration::from_millis(100));
+        eprintln!("server spawned");
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        client
+            .write_all(b"GET /hello HTTP/1.1\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        thread::sleep(Duration::from_millis(100));
+        eprintln!("client spawned");
+
+        let mut buf = [0; 1 << 21];
+        let size = client.read(&mut buf).unwrap();
+        /*
+        assert_eq!(
+            &buf[..size],
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".as_ref()
+        );*/
+        assert_eq!(size, 5000);
     }
 }

@@ -168,40 +168,42 @@ impl<H: HandleRequest> HandleInput for InputHandler<H> {
     }
 
     fn handle_input(&mut self, buf: &mut ReadBuf<Vec<u8>>) -> Result<Option<BoxReply>> {
-        if let Some(res) = self.res.take() {
-            let encoder = self.encoder.take().expect("Never fails");
-            return Ok(Some(BoxReply::new::<_, H>(futures::finished(res), encoder)));
-        }
-
-        let result = self.decoder.decode_from_read_buf(buf).and_then(|()| {
-            if self.decoder.is_idle() {
-                self.decoder.finish_decoding().map(Some)
-            } else {
-                Ok(None)
-            }
-        });
-        match result {
-            Err(e) => {
-                let e = track!(Error::from(e));
-                let req = self.req_head.take().expect("Never fails");
-                if let Some(res) = self.req_handler.handle_decoding_error(req, &e) {
-                    self.is_closed = true;
-                    self.res = Some(res);
-                    self.handle_input(buf)
-                } else {
-                    Err(e)
-                }
-            }
-            Ok(None) => Ok(None),
-            Ok(Some(body)) => {
-                let req = self
-                    .req_head
-                    .take()
-                    .expect("Never fails")
-                    .map_body(|()| body);
-                let reply = self.req_handler.handle_request(req);
+        loop {
+            if let Some(res) = self.res.take() {
                 let encoder = self.encoder.take().expect("Never fails");
-                Ok(Some(BoxReply::new::<_, H>(reply, encoder)))
+                return Ok(Some(BoxReply::new::<_, H>(futures::finished(res), encoder)));
+            }
+
+            let result = self.decoder.decode_from_read_buf(buf).and_then(|()| {
+                if self.decoder.is_idle() {
+                    self.decoder.finish_decoding().map(Some)
+                } else {
+                    Ok(None)
+                }
+            });
+            match result {
+                Err(e) => {
+                    let e = track!(Error::from(e));
+                    let req = self.req_head.take().expect("Never fails");
+                    if let Some(res) = self.req_handler.handle_decoding_error(req, &e) {
+                        self.is_closed = true;
+                        self.res = Some(res);
+                        continue;
+                    } else {
+                        return Err(e);
+                    }
+                }
+                Ok(None) => return Ok(None),
+                Ok(Some(body)) => {
+                    let req = self
+                        .req_head
+                        .take()
+                        .expect("Never fails")
+                        .map_body(|()| body);
+                    let reply = self.req_handler.handle_request(req);
+                    let encoder = self.encoder.take().expect("Never fails");
+                    return Ok(Some(BoxReply::new::<_, H>(reply, encoder)));
+                }
             }
         }
     }
