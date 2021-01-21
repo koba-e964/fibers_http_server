@@ -31,7 +31,6 @@
 //!     }
 //! }
 //!
-//! # fn main() {
 //! let addr = "127.0.0.1:14758".parse().unwrap();
 //!
 //! // HTTP server
@@ -58,7 +57,6 @@
 //!     &buf[..size],
 //!     b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".as_ref()
 //! );
-//! # }
 //! ```
 #![warn(missing_docs)]
 #[macro_use]
@@ -119,20 +117,25 @@ mod test {
 
     #[test]
     fn it_works() {
-        let mut builder = ServerBuilder::new(([127, 0, 0, 1], 0).into());
+        use fibers::{Executor, Spawn, ThreadPoolExecutor};
+        use futures::Future;
+
+        let mut exec = ThreadPoolExecutor::with_thread_count(10).unwrap();
+
+        let mut builder = ServerBuilder::new(([127, 0, 0, 1], 12341).into());
         builder.add_handler(Hello).unwrap();
-        let server = builder.finish(fibers_global::handle());
-        let (server, addr) = fibers_global::execute(server.local_addr()).unwrap();
-        thread::spawn(move || {
-            fibers_global::execute(server).unwrap();
-        });
+        let server = builder.finish(exec.handle());
+        let (server, addr) = exec.run_future(server.local_addr()).unwrap().unwrap();
+        exec.spawn(server.map(|_x| ()).map_err(|_y| ()));
         thread::sleep(Duration::from_millis(100));
+        eprintln!("server spawned");
 
         let mut client = TcpStream::connect(addr).unwrap();
         client
             .write_all(b"GET /hello HTTP/1.1\r\nContent-Length: 0\r\n\r\n")
             .unwrap();
         thread::sleep(Duration::from_millis(100));
+        eprintln!("client spawned");
 
         let mut buf = [0; 1024];
         let size = client.read(&mut buf).unwrap();
