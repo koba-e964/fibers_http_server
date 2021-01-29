@@ -111,7 +111,8 @@ mod test {
         type Reply = Reply<Self::ResBody>;
 
         fn handle_request(&self, _req: Req<Self::ReqBody>) -> Self::Reply {
-            Box::new(ok(Res::new(Status::Ok, "hello".to_owned())))
+            let s = "a".repeat(100000);
+            Box::new(ok(Res::new(Status::Ok, s)))
         }
     }
 
@@ -137,11 +138,8 @@ mod test {
         thread::sleep(Duration::from_millis(100));
         eprintln!("client spawned");
 
-        let mut buf = [0; 1024];
+        let mut buf = [0; 1 << 18];
         let size = client.read(&mut buf).unwrap();
-        assert_eq!(
-            &buf[..size],
-            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".as_ref()
-        );
+        assert_eq!(size, 100043);
     }
 }

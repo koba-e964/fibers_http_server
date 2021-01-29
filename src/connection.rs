@@ -5,11 +5,15 @@ use crate::response::ResEncoder;
 use crate::server::ServerOptions;
 use crate::{Error, Req, Result, Status};
 use bytecodec::combinator::MaybeEos;
-use bytecodec::io::{BufferedIo, IoDecodeExt, IoEncodeExt};
+use bytecodec::io::{IoDecodeExt, IoEncodeExt};
+use bytecodec::io_async::BufferedIo;
 use bytecodec::{Decode, DecodeExt, Encode};
-use futures::{Async, Future, Poll};
+use core::task::{Context, Poll as Poll03};
+use futures::{Async, Future};
+use futures03::Future as Future03;
 use httpcodec::{NoBodyDecoder, RequestDecoder};
 use slog::Logger;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::{io::Read, mem};
 use std::{
@@ -23,7 +27,7 @@ use url::Url;
 pub struct Connection {
     logger: Logger,
     metrics: ServerMetrics,
-    stream: BufferedIo<ReadWriteWrapper>,
+    stream: BufferedIo<TcpStream>,
     req_head_decoder: MaybeEos<RequestDecoder<NoBodyDecoder>>,
     dispatcher: Dispatcher,
     is_server_alive: Arc<AtomicBool>,
@@ -53,11 +57,7 @@ impl Connection {
         Ok(Connection {
             logger,
             metrics,
-            stream: BufferedIo::new(
-                ReadWriteWrapper(stream),
-                options.read_buffer_size,
-                options.write_buffer_size,
-            ),
+            stream: BufferedIo::new(stream, options.read_buffer_size, options.write_buffer_size),
             req_head_decoder: req_head_decoder.maybe_eos(),
             dispatcher,
             is_server_alive,
@@ -172,40 +172,40 @@ impl Connection {
         }
     }
 
-    fn poll_once(&mut self) -> Result<bool> {
-        track!(self.stream.execute_io())?;
-        let old = mem::discriminant(&self.phase);
-        let next = match self.phase.take() {
-            Phase::ReadRequestHead => self.read_request_head(),
-            Phase::DispatchRequest(req) => self.dispatch_request(req),
-            Phase::HandleRequest(handler) => self.handle_request(handler),
-            Phase::PollReply(reply) => self.poll_reply(reply),
-            Phase::WriteResponse(res) => track!(self.write_response(res))?,
+    fn poll_once(self: Pin<&mut Self>, cx: &mut Context) -> Result<bool> {
+        let self_mut = self.get_mut();
+        track!(Pin::new(&mut self_mut.stream).execute_io(cx))?;
+        let old = mem::discriminant(&self_mut.phase);
+        let next = match self_mut.phase.take() {
+            Phase::ReadRequestHead => self_mut.read_request_head(),
+            Phase::DispatchRequest(req) => self_mut.dispatch_request(req),
+            Phase::HandleRequest(handler) => self_mut.handle_request(handler),
+            Phase::PollReply(reply) => self_mut.poll_reply(reply),
+            Phase::WriteResponse(res) => track!(self_mut.write_response(res))?,
             Phase::Closed => Phase::Closed,
         };
-        self.phase = next;
-        let changed = mem::discriminant(&self.phase) != old;
-        Ok(changed || !self.stream.would_block())
+        self_mut.phase = next;
+        let changed = mem::discriminant(&self_mut.phase) != old;
+        Ok(changed || !self_mut.stream.would_block())
     }
 }
-impl Future for Connection {
-    type Item = ();
-    type Error = ();
+impl Future03 for Connection {
+    type Output = std::result::Result<(), ()>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        while !self.is_closed() {
-            match track!(self.poll_once()) {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll03<Self::Output> {
+        while !self.as_ref().is_closed() {
+            match track!(self.as_mut().poll_once(cx)) {
                 Err(e) => {
                     warn!(self.logger, "Connection aborted: {}", e);
                     self.metrics.disconnected_tcp_clients.increment();
-                    return Err(());
+                    return Poll03::Ready(Err(()));
                 }
                 Ok(do_continue) => {
                     if !do_continue {
                         if self.is_closed() {
                             break;
                         }
-                        return Ok(Async::NotReady);
+                        return Poll03::Pending;
                     }
                 }
             }
@@ -213,7 +213,7 @@ impl Future for Connection {
 
         debug!(self.logger, "Connection closed");
         self.metrics.disconnected_tcp_clients.increment();
-        Ok(Async::Ready(()))
+        Poll03::Ready(Ok(()))
     }
 }
 
@@ -245,13 +245,17 @@ struct ReadWriteWrapper(TcpStream);
 
 impl Read for ReadWriteWrapper {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.0.try_read(buf)
+        let s = self.0.try_read(buf);
+        eprintln!("result = {:?}", s);
+        s
     }
 }
 
 impl Write for ReadWriteWrapper {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.try_write(buf)
+        let s = self.0.try_write(buf);
+        eprintln!("result w = {:?}", s);
+        s
     }
 
     fn flush(&mut self) -> std::io::Result<()> {

@@ -5,7 +5,7 @@ use crate::{Error, HandleRequest, HandlerOptions, Result};
 use core::task::{Context, Poll as Poll03};
 use factory::Factory;
 use fibers::{self, BoxSpawn, Spawn};
-use futures::future::{loop_fn, ok, Either, Loop};
+use futures::future::ok;
 use futures::{Async, Future, Poll, Stream};
 use futures03::compat::Compat;
 use futures03::Stream as Stream03;
@@ -205,7 +205,7 @@ impl Future for Server {
                         Arc::clone(&self.is_server_alive),
                         &self.options,
                     ))?;
-                    self.spawner.spawn(future);
+                    self.spawner.spawn(future.compat());
                 }
             }
         }

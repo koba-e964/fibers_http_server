@@ -35,3 +35,4 @@ sloggers = "0.3"
 
 [patch.crates-io]
 fibers = { git = "https://github.com/dwango/fibers-rs", branch = "tmp/tokio-1.0" }
+bytecodec = { git = "https://github.com/koba-e964/bytecodec", branch = "tmp/tokio-1.0" }
