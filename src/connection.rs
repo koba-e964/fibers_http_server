@@ -5,8 +5,7 @@ use crate::response::ResEncoder;
 use crate::server::ServerOptions;
 use crate::{Error, Req, Result, Status};
 use bytecodec::combinator::MaybeEos;
-use bytecodec::io::{IoDecodeExt, IoEncodeExt};
-use bytecodec::io_async::BufferedIo;
+use bytecodec::io::{BufferedIo, IoDecodeExt, IoEncodeExt};
 use bytecodec::{Decode, DecodeExt, Encode};
 use core::task::{Context, Poll as Poll03};
 use futures::{Async, Future};
@@ -174,7 +173,7 @@ impl Connection {
 
     fn poll_once(self: Pin<&mut Self>, cx: &mut Context) -> Result<bool> {
         let self_mut = self.get_mut();
-        track!(Pin::new(&mut self_mut.stream).execute_io(cx))?;
+        track!(Pin::new(&mut self_mut.stream).execute_io_poll(cx))?;
         let old = mem::discriminant(&self_mut.phase);
         let next = match self_mut.phase.take() {
             Phase::ReadRequestHead => self_mut.read_request_head(),
