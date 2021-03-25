@@ -173,7 +173,11 @@ impl Connection {
 
     fn poll_once(self: Pin<&mut Self>, cx: &mut Context) -> Result<bool> {
         let self_mut = self.get_mut();
-        track!(Pin::new(&mut self_mut.stream).execute_io_poll(cx))?;
+        let poll_result = Pin::new(&mut self_mut.stream).execute_io_poll(cx);
+        if let Poll03::Ready(result) = poll_result {
+            track!(result)?;
+        }
+
         let old = mem::discriminant(&self_mut.phase);
         let next = match self_mut.phase.take() {
             Phase::ReadRequestHead => self_mut.read_request_head(),
