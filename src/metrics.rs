@@ -4,19 +4,21 @@
 use crate::{Error, HandleRequest, Req, Res, Status};
 use atomic_immut::AtomicImmut;
 use bytecodec::bytes::Utf8Encoder;
-use bytecodec::marker::Never;
 use bytecodec::null::NullDecoder;
-use fibers::sync::oneshot;
-use futures::{Async, Future, Poll};
+use futures03::Future;
 use httpcodec::{BodyDecoder, BodyEncoder};
+use pin_project::pin_project;
 use prometrics;
 use prometrics::bucket::Bucket;
 use prometrics::metrics::{Counter, Histogram, HistogramBuilder, MetricBuilder};
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::thread;
 use std::time::Instant;
+use tokio::sync::oneshot;
 
 /// HTTP server metrics.
 #[derive(Debug, Clone)]
@@ -153,7 +155,7 @@ impl HandleRequest for MetricsHandler {
     type ResBody = String;
     type Decoder = BodyDecoder<NullDecoder>;
     type Encoder = BodyEncoder<Utf8Encoder>;
-    type Reply = Box<dyn Future<Item = Res<Self::ResBody>, Error = Never> + Send + 'static>;
+    type Reply = Box<dyn Future<Output = Res<Self::ResBody>> + Send + Unpin + 'static>;
 
     fn handle_request(&self, _req: Req<Self::ReqBody>) -> Self::Reply {
         let (tx, rx) = oneshot::channel();
@@ -167,7 +169,10 @@ impl HandleRequest for MetricsHandler {
             };
             let _ = tx.send(res);
         });
-        Box::new(rx.or_else(|e| Ok(Res::new(Status::InternalServerError, e.to_string()))))
+        Box::new(Box::pin(async {
+            let result = rx.await;
+            result.unwrap_or_else(|e| Res::new(Status::InternalServerError, e.to_string()))
+        }))
     }
 }
 
@@ -235,8 +240,10 @@ impl<H: HandleRequest> HandleRequest for WithMetrics<H> {
 }
 
 /// `Future` that for measuring the time elapsed to handle a request.
+#[pin_project]
 #[derive(Debug)]
 pub struct Time<H: HandleRequest> {
+    #[pin]
     future: H::Reply,
     start: Instant,
     metrics: HandlerMetrics,
@@ -253,17 +260,17 @@ impl<H: HandleRequest> Time<H> {
     }
 }
 impl<H: HandleRequest> Future for Time<H> {
-    type Item = Res<H::ResBody>;
-    type Error = Never;
+    type Output = Res<H::ResBody>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Ok(Async::Ready(res)) = self.future.poll() {
-            let elapsed = prometrics::timestamp::duration_to_seconds(self.start.elapsed());
-            self.metrics.request_duration_seconds.observe(elapsed);
-            self.metrics.increment_status(res.status_code());
-            Ok(Async::Ready(res))
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = self.project();
+        if let Poll::Ready(res) = this.future.poll(cx) {
+            let elapsed = prometrics::timestamp::duration_to_seconds(this.start.elapsed());
+            this.metrics.request_duration_seconds.observe(elapsed);
+            this.metrics.increment_status(res.status_code());
+            Poll::Ready(res)
         } else {
-            Ok(Async::NotReady)
+            Poll::Pending
         }
     }
 }

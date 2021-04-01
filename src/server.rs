@@ -2,16 +2,13 @@ use crate::connection::Connection;
 use crate::dispatcher::{Dispatcher, DispatcherBuilder};
 use crate::metrics::ServerMetrics;
 use crate::{Error, HandleRequest, HandlerOptions, Result};
-use core::task::{Context, Poll as Poll03};
 use factory::Factory;
 use fibers::{self, BoxSpawn, Spawn};
-use futures::future::ok;
-use futures::{Async, Future, Poll, Stream};
-use futures03::compat::Compat;
-use futures03::Stream as Stream03;
 use futures03::TryFutureExt;
-use futures03::TryStreamExt;
+use futures03::{compat::Compat, ready};
+use futures03::{Future, Stream};
 use httpcodec::DecodeOptions;
+use pin_project::{pin_project, pinned_drop};
 use prometrics::metrics::MetricBuilder;
 use slog::{Discard, Logger};
 use std::io::Result as IOResult;
@@ -19,6 +16,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
@@ -131,12 +129,11 @@ impl ServerBuilder {
 
         info!(logger, "Starts HTTP server");
         let fut03: Pin<_> = Box::pin(TcpListener::bind(self.bind_addr));
-        let fut01 = fut03.compat();
         Server {
             logger,
             metrics: ServerMetrics::new(self.metrics),
             spawner: spawner.boxed(),
-            listener: Listener::Binding(Box::new(fut01.map_err(Error::from)), self.bind_addr),
+            listener: Listener::Binding(Box::new(fut03.map_err(Error::from)), self.bind_addr),
             dispatcher: self.dispatcher.finish(),
             is_server_alive: Arc::new(AtomicBool::new(true)),
             options: self.options,
@@ -148,12 +145,14 @@ impl ServerBuilder {
 /// HTTP server.
 ///
 /// This is created via `ServerBuilder`.
+#[pin_project(PinnedDrop)]
 #[must_use = "future do nothing unless polled"]
 #[derive(Debug)]
 pub struct Server {
     logger: Logger,
     metrics: ServerMetrics,
     spawner: BoxSpawn,
+    #[pin]
     listener: Listener,
     dispatcher: Dispatcher,
     is_server_alive: Arc<AtomicBool>,
@@ -162,13 +161,19 @@ pub struct Server {
 }
 impl Server {
     /// Returns a future that retrieves the address to which the server is bound.
-    pub fn local_addr(self) -> impl Future<Item = (Self, SocketAddr), Error = Error> {
+    #[deprecated(note = "Please use local_addr_immediate instead")]
+    pub fn local_addr(self) -> impl Future<Output = Result<(Self, SocketAddr)>> {
+        let result = match self.local_addr_immediate() {
+            Ok(local_addr) => Ok((self, local_addr)),
+            Err(e) => Err(e),
+        };
+        futures03::future::ready(result)
+    }
+
+    pub fn local_addr_immediate(&self) -> Result<SocketAddr> {
         match self.listener {
-            Listener::Listening { .. } => match self.listener.local_addr() {
-                Ok(local_addr) => ok((self, local_addr)),
-                Err(e) => futures::future::err(Error::from(e)),
-            },
-            Listener::Binding(_, local_addr) => ok((self, local_addr)),
+            Listener::Listening { .. } => self.listener.local_addr().map_err(Error::from),
+            Listener::Binding(_, local_addr) => Ok(local_addr),
         }
     }
 
@@ -178,53 +183,56 @@ impl Server {
     }
 }
 impl Future for Server {
-    type Item = ();
-    type Error = Error;
+    type Output = Result<()>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
-            match track!(self.listener.poll())? {
-                Async::NotReady => {
+            let this = self.project();
+            match track!(this.listener.poll_next(cx)) {
+                Poll::Pending => {
                     break;
                 }
-                Async::Ready(None) => {
-                    warn!(self.logger, "The socket of the HTTP server has been closed");
-                    return Ok(Async::Ready(()));
+                Poll::Ready(None) => {
+                    warn!(this.logger, "The socket of the HTTP server has been closed");
+                    return Poll::Ready(Ok(()));
                 }
-                Async::Ready(Some((stream, client_addr))) => {
+                Poll::Ready(Some(result)) => {
+                    let (stream, client_addr) = result?;
                     // 元の実装では Connected (TcpStream へと解決される Future) を格納したが、
                     // tokio を使う場合は所望の TcpStream がそのまま格納されるため、Server 内部の poll でまた解決する必要がなくなる。
                     // それを受け、ここで Connection の spawn 処理をやる。
-                    let logger = self.logger.new(o!("client" => client_addr.to_string()));
+                    let logger = this.logger.new(o!("client" => client_addr.to_string()));
                     debug!(logger, "New client arrived");
                     let future = track!(Connection::new(
                         logger,
-                        self.metrics.clone(),
+                        this.metrics.clone(),
                         stream,
-                        self.dispatcher.clone(),
-                        Arc::clone(&self.is_server_alive),
-                        &self.options,
+                        this.dispatcher.clone(),
+                        Arc::clone(&this.is_server_alive),
+                        &this.options,
                     ))?;
-                    self.spawner.spawn(future.compat());
+                    this.spawner.spawn(future.compat());
                 }
             }
         }
 
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
-impl Drop for Server {
-    fn drop(&mut self) {
+#[pinned_drop]
+impl PinnedDrop for Server {
+    fn drop(self: Pin<&mut Self>) {
         self.is_server_alive.store(false, Ordering::SeqCst);
     }
 }
 
+#[pin_project(project = ListenerProj)]
 enum Listener {
     Binding(
-        Box<dyn Future<Item = TcpListener, Error = Error> + Send + 'static>,
+        #[pin] Box<dyn Future<Output = Result<TcpListener>> + Send + Unpin + 'static>,
         SocketAddr,
     ),
-    Listening(ListenerCompat),
+    Listening(#[pin] TcpListener),
 }
 impl Listener {
     fn local_addr(&self) -> IOResult<SocketAddr> {
@@ -235,26 +243,27 @@ impl Listener {
     }
 }
 impl Stream for Listener {
-    type Item = (TcpStream, SocketAddr);
-    type Error = Error;
+    type Item = Result<(TcpStream, SocketAddr)>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         loop {
-            let next = match self {
-                Listener::Binding(f, _) => {
-                    if let Async::Ready(listener) = track!(f.poll().map_err(Error::from))? {
-                        Listener::Listening(ListenerCompat {
-                            inner: TcpListenerWrapper(listener).compat(),
-                        })
+            let next = match self.project() {
+                ListenerProj::Binding(f, _) => {
+                    if let Poll::Ready(listener) = track!(f.poll(cx).map_err(Error::from))? {
+                        Listener::Listening(listener)
                     } else {
                         break;
                     }
                 }
-                Listener::Listening(s) => return track!(s.poll()),
+                ListenerProj::Listening(s) => {
+                    return Poll::Ready(track!(Some(
+                        ready!(s.poll_accept(cx)).map_err(Error::from)
+                    )))
+                }
             };
             *self = next;
         }
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 
@@ -280,44 +289,15 @@ impl TcpListenerWrapper {
     }
 }
 
-impl Stream03 for TcpListenerWrapper {
+impl Stream for TcpListenerWrapper {
     type Item = IOResult<TcpStream>;
 
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll03<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.0.poll_accept(cx) {
-            Poll03::Ready(Ok((socket, _))) => Poll03::Ready(Some(Ok(socket))),
-            Poll03::Ready(Err(e)) => Poll03::Ready(Some(Err(e))),
-            Poll03::Pending => Poll03::Pending,
+            Poll::Ready(Ok((socket, _))) => Poll::Ready(Some(Ok(socket))),
+            Poll::Ready(Err(e)) => Poll::Ready(Some(Err(e))),
+            Poll::Pending => Poll::Pending,
         }
-    }
-}
-
-#[derive(Debug)]
-struct ListenerCompat {
-    inner: Compat<TcpListenerWrapper>,
-}
-
-impl Stream for ListenerCompat {
-    type Item = (TcpStream, SocketAddr);
-
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let local_addr = self.local_addr()?;
-        match self.inner.poll()? {
-            Async::Ready(Some(stream)) => Ok(Async::Ready(Some((stream, local_addr)))),
-            Async::Ready(None) => Ok(Async::Ready(None)),
-            Async::NotReady => Ok(Async::NotReady),
-        }
-    }
-}
-
-impl ListenerCompat {
-    fn local_addr(&self) -> IOResult<SocketAddr> {
-        self.inner.get_ref().local_addr()
     }
 }
 

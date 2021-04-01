@@ -1,14 +1,16 @@
 use crate::response::ResEncoder;
 use crate::{Error, Req, Res, Result};
 use bytecodec::io::{IoDecodeExt, ReadBuf};
-use bytecodec::marker::Never;
 use bytecodec::{Decode, EncodeExt};
 use factory::{DefaultFactory, Factory};
-use futures::{self, Future, Poll};
+use futures03::{Future, FutureExt};
 use httpcodec::{BodyDecode, BodyEncode, ResponseEncoder};
+use pin_project::pin_project;
 use std::fmt;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 /// `HandleRequest` allows for handling HTTP requests.
 pub trait HandleRequest: Sized + Send + Sync + 'static {
@@ -35,7 +37,7 @@ pub trait HandleRequest: Sized + Send + Sync + 'static {
     type Encoder: BodyEncode<Item = Self::ResBody> + Send + 'static;
 
     /// `Future` that represents reply to a request.
-    type Reply: Future<Item = Res<Self::ResBody>, Error = Never> + Send + 'static;
+    type Reply: Future<Output = Res<Self::ResBody>> + Send + 'static;
 
     /// Handles the head part of a request.
     ///
@@ -170,7 +172,10 @@ impl<H: HandleRequest> HandleInput for InputHandler<H> {
     fn handle_input(&mut self, buf: &mut ReadBuf<Vec<u8>>) -> Result<Option<BoxReply>> {
         if let Some(res) = self.res.take() {
             let encoder = self.encoder.take().expect("Never fails");
-            return Ok(Some(BoxReply::new::<_, H>(futures::finished(res), encoder)));
+            return Ok(Some(BoxReply::new::<_, H>(
+                futures03::future::ready(res),
+                encoder,
+            )));
         }
 
         let result = self.decoder.decode_from_read_buf(buf).and_then(|()| {
@@ -267,29 +272,29 @@ impl fmt::Debug for RequestHandlerFactory {
 }
 
 /// An alias of the typical `Future` that can be used as the result of `HandleRequest::handle_request` method.
-pub type Reply<T> = Box<dyn Future<Item = Res<T>, Error = Never> + Send + 'static>;
+pub type Reply<T> = Box<dyn Future<Output = Res<T>> + Send + Unpin + 'static>;
 
-pub struct BoxReply(Box<dyn Future<Item = ResEncoder, Error = Never> + Send + 'static>);
+#[pin_project]
+pub struct BoxReply(#[pin] Box<dyn Future<Output = ResEncoder> + Send + Unpin + 'static>);
 impl BoxReply {
     fn new<F, H>(reply: F, encoder: H::Encoder) -> Self
     where
-        F: Future<Item = Res<H::ResBody>, Error = Never> + Send + 'static,
+        F: Future<Output = Res<H::ResBody>> + Send + 'static,
         H: HandleRequest,
     {
-        let future = reply.and_then(move |res| {
+        let future = reply.map(move |res| {
             let body_encoder = Box::new(encoder);
             let encoder = ResponseEncoder::new(body_encoder).last(res.0);
-            futures::finished(ResEncoder::new(encoder))
+            ResEncoder::new(encoder)
         });
-        BoxReply(Box::new(future))
+        BoxReply(Box::new(Box::pin(future)))
     }
 }
 impl Future for BoxReply {
-    type Item = ResEncoder;
-    type Error = Never;
+    type Output = ResEncoder;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0.poll()
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        self.project().0.poll(cx)
     }
 }
 impl fmt::Debug for BoxReply {

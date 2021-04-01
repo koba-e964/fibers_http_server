@@ -7,13 +7,13 @@ use crate::{Error, Req, Result, Status};
 use bytecodec::combinator::MaybeEos;
 use bytecodec::io::{BufferedIo, IoDecodeExt, IoEncodeExt};
 use bytecodec::{Decode, DecodeExt, Encode};
-use core::task::{Context, Poll as Poll03};
-use futures::{Async, Future};
 use futures03::Future as Future03;
 use httpcodec::{NoBodyDecoder, RequestDecoder};
+use pin_project::pin_project;
 use slog::Logger;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::{io::Read, mem};
 use std::{
     io::Write,
@@ -147,11 +147,11 @@ impl Connection {
         }
     }
 
-    fn poll_reply(&mut self, mut reply: BoxReply) -> Phase {
-        if let Async::Ready(res_encoder) = reply.poll().expect("Never fails") {
-            Phase::WriteResponse(res_encoder)
+    fn poll_reply(reply: Pin<&mut BoxReply>, cx: &mut Context) -> Option<ResEncoder> {
+        if let Poll::Ready(res_encoder) = reply.poll(cx) {
+            Some(res_encoder)
         } else {
-            Phase::PollReply(reply)
+            None
         }
     }
 
@@ -174,7 +174,7 @@ impl Connection {
     fn poll_once(self: Pin<&mut Self>, cx: &mut Context) -> Result<bool> {
         let self_mut = self.get_mut();
         let poll_result = Pin::new(&mut self_mut.stream).execute_io_poll(cx);
-        if let Poll03::Ready(result) = poll_result {
+        if let Poll::Ready(result) = poll_result {
             track!(result)?;
         }
 
@@ -183,7 +183,13 @@ impl Connection {
             Phase::ReadRequestHead => self_mut.read_request_head(),
             Phase::DispatchRequest(req) => self_mut.dispatch_request(req),
             Phase::HandleRequest(handler) => self_mut.handle_request(handler),
-            Phase::PollReply(reply) => self_mut.poll_reply(reply),
+            Phase::PollReply(reply) => {
+                if let Some(res_encoder) = Self::poll_reply(Pin::new(&mut reply), cx) {
+                    Phase::WriteResponse(res_encoder)
+                } else {
+                    Phase::PollReply(reply)
+                }
+            }
             Phase::WriteResponse(res) => track!(self_mut.write_response(res))?,
             Phase::Closed => Phase::Closed,
         };
@@ -195,20 +201,20 @@ impl Connection {
 impl Future03 for Connection {
     type Output = std::result::Result<(), ()>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll03<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         while !self.as_ref().is_closed() {
             match track!(self.as_mut().poll_once(cx)) {
                 Err(e) => {
                     warn!(self.logger, "Connection aborted: {}", e);
                     self.metrics.disconnected_tcp_clients.increment();
-                    return Poll03::Ready(Err(()));
+                    return Poll::Ready(Err(()));
                 }
                 Ok(do_continue) => {
                     if !do_continue {
                         if self.is_closed() {
                             break;
                         }
-                        return Poll03::Pending;
+                        return Poll::Pending;
                     }
                 }
             }
@@ -216,16 +222,17 @@ impl Future03 for Connection {
 
         debug!(self.logger, "Connection closed");
         self.metrics.disconnected_tcp_clients.increment();
-        Poll03::Ready(Ok(()))
+        Poll::Ready(Ok(()))
     }
 }
 
+#[pin_project(project = PhaseProj)]
 #[derive(Debug)]
 enum Phase {
     ReadRequestHead,
     DispatchRequest(Req<()>),
     HandleRequest(RequestHandlerInstance),
-    PollReply(BoxReply),
+    PollReply(#[pin] BoxReply),
     WriteResponse(ResEncoder),
     Closed,
 }
