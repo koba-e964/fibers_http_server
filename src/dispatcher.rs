@@ -198,7 +198,6 @@ mod test {
     use super::*;
     use crate::{Reply, Req, Res, Status};
     use bytecodec::null::NullDecoder;
-    use futures::future::ok;
     use httpcodec::{BodyDecoder, NoBodyEncoder};
     use url::Url;
 
@@ -216,7 +215,7 @@ mod test {
                 type Reply = Reply<Self::ResBody>;
 
                 fn handle_request(&self, _req: Req<Self::ReqBody>) -> Self::Reply {
-                    Box::new(ok(Res::new(Status::Ok, ())))
+                    Box::new(futures03::future::ready(Res::new(Status::Ok, ())))
                 }
             }
         };

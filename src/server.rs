@@ -3,7 +3,6 @@ use crate::dispatcher::{Dispatcher, DispatcherBuilder};
 use crate::metrics::ServerMetrics;
 use crate::{Error, HandleRequest, HandlerOptions, Result};
 use factory::Factory;
-use fibers::{self, BoxSpawn, Spawn};
 use futures03::TryFutureExt;
 use futures03::{compat::Compat, ready};
 use futures03::{Future, Stream};
@@ -121,10 +120,7 @@ impl ServerBuilder {
     }
 
     /// Builds a HTTP server with the given settings.
-    pub fn finish<S>(self, spawner: S) -> Server
-    where
-        S: Spawn + Send + 'static,
-    {
+    pub fn finish(self) -> Server {
         let logger = self.logger.new(o!("server" => self.bind_addr.to_string()));
 
         info!(logger, "Starts HTTP server");
@@ -132,7 +128,6 @@ impl ServerBuilder {
         Server {
             logger,
             metrics: ServerMetrics::new(self.metrics),
-            spawner: spawner.boxed(),
             listener: Listener::Binding(Box::new(fut03.map_err(Error::from)), self.bind_addr),
             dispatcher: self.dispatcher.finish(),
             is_server_alive: Arc::new(AtomicBool::new(true)),
@@ -151,7 +146,6 @@ impl ServerBuilder {
 pub struct Server {
     logger: Logger,
     metrics: ServerMetrics,
-    spawner: BoxSpawn,
     #[pin]
     listener: Listener,
     dispatcher: Dispatcher,
@@ -212,7 +206,7 @@ impl Future for Server {
                         Arc::clone(&this.is_server_alive),
                         &this.options,
                     ))?;
-                    this.spawner.spawn(future.compat());
+                    tokio::spawn(future);
                 }
             }
         }

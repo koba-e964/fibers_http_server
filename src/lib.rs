@@ -90,7 +90,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 mod test {
     use bytecodec::bytes::Utf8Encoder;
     use bytecodec::null::NullDecoder;
-    use futures::future::ok;
     use httpcodec::{BodyDecoder, BodyEncoder};
     use std::io::{Read, Write};
     use std::net::TcpStream;
@@ -112,22 +111,17 @@ mod test {
 
         fn handle_request(&self, _req: Req<Self::ReqBody>) -> Self::Reply {
             let s = "a".repeat(100000);
-            Box::new(ok(Res::new(Status::Ok, s)))
+            Box::new(futures03::future::ready(Res::new(Status::Ok, s)))
         }
     }
 
-    #[test]
-    fn it_works() {
-        use fibers::{Executor, Spawn, ThreadPoolExecutor};
-        use futures::Future;
-
-        let mut exec = ThreadPoolExecutor::with_thread_count(10).unwrap();
-
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn it_works() {
         let mut builder = ServerBuilder::new(([127, 0, 0, 1], 12341).into());
         builder.add_handler(Hello).unwrap();
-        let server = builder.finish(exec.handle());
-        let (server, addr) = exec.run_future(server.local_addr()).unwrap().unwrap();
-        exec.spawn(server.map(|_x| ()).map_err(|_y| ()));
+        let server = builder.finish();
+        let addr = server.local_addr_immediate().unwrap();
+        tokio::spawn(server);
         thread::sleep(Duration::from_millis(100));
         eprintln!("server spawned");
 

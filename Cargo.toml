@@ -27,7 +27,7 @@ prometrics = "0.1"
 slog = "2"
 trackable = "0.2"
 url = "1"
-tokio = { version = "1.0", features = ["net", "io-util", "sync"] }
+tokio = { version = "1.0", features = ["net", "io-util", "sync", "rt", "macros"] }
 pin-project = "1"
 
 [dev-dependencies]
