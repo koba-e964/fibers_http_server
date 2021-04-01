@@ -9,9 +9,8 @@
 //! use std::time::Duration;
 //! use bytecodec::bytes::Utf8Encoder;
 //! use bytecodec::null::NullDecoder;
-//! use fibers::{Executor, Spawn, InPlaceExecutor};
 //! use fibers_http_server::{HandleRequest, Reply, Req, Res, ServerBuilder, Status};
-//! use futures::future::{ok, Future};
+//! use futures03::future::Future;
 //! use httpcodec::{BodyDecoder, BodyEncoder};
 //!
 //! // Request handler
@@ -27,20 +26,20 @@
 //!     type Reply = Reply<Self::ResBody>;
 //!
 //!     fn handle_request(&self, _req: Req<Self::ReqBody>) -> Self::Reply {
-//!         Box::new(ok(Res::new(Status::Ok, "hello".to_owned())))
+//!         Box::new(futures03::future::ready(Res::new(Status::Ok, "hello".to_owned())))
 //!     }
 //! }
 //!
+//! #[tokio::main]
+//! async fn main() {
 //! let addr = "127.0.0.1:14758".parse().unwrap();
 //!
 //! // HTTP server
-//! thread::spawn(move || {
-//!     let executor = InPlaceExecutor::new().unwrap();
+//! tokio::spawn({
 //!     let mut builder = ServerBuilder::new(addr);
 //!     builder.add_handler(Hello).unwrap();
-//!     let server = builder.finish(executor.handle());
-//!     executor.spawn(server.map_err(|e| panic!("{}", e)));
-//!     executor.run().unwrap()
+//!     let server = builder.finish();
+//!     server
 //! });
 //! thread::sleep(Duration::from_millis(100));
 //!
@@ -57,6 +56,7 @@
 //!     &buf[..size],
 //!     b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".as_ref()
 //! );
+//! }
 //! ```
 #![warn(missing_docs)]
 #[macro_use]

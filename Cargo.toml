@@ -19,8 +19,6 @@ codecov = {repository = "sile/fibers_http_server"}
 atomic_immut = "0.1"
 bytecodec = { version = "0.4", features = ["tokio-async"] }
 factory = "0.1"
-fibers = "0.1"
-futures = "0.1"
 futures03 = { package = "futures", version = "0.3" }
 httpcodec = "0.2"
 prometrics = "0.1"

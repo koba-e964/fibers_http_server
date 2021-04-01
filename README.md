@@ -21,9 +21,8 @@ use std::thread;
 use std::time::Duration;
 use bytecodec::bytes::Utf8Encoder;
 use bytecodec::value::NullDecoder;
-use fibers::{Executor, Spawn, InPlaceExecutor};
 use fibers_http_server::{HandleRequest, Reply, Req, Res, ServerBuilder, Status};
-use futures::future::{ok, Future};
+use futures03::future::Future;
 use httpcodec::{BodyDecoder, BodyEncoder};
 
 // Request handler
@@ -43,17 +42,18 @@ impl HandleRequest for Hello {
     }
 }
 
+#[tokio::main]
+async fn main() {
 let addr = "127.0.0.1:14758".parse().unwrap();
-
+//!
 // HTTP server
-thread::spawn(move || {
-    let executor = InPlaceExecutor::new().unwrap();
+tokio::spawn({
     let mut builder = ServerBuilder::new(addr);
     builder.add_handler(Hello).unwrap();
-    let server = builder.finish(executor.handle());
-    executor.spawn(server.map_err(|e| panic!("{}", e)));
-    executor.run().unwrap()
+    let server = builder.finish();
+    server
 });
+thread::sleep(Duration::from_millis(100));
 thread::sleep(Duration::from_millis(100));
 
 // HTTP client
