@@ -170,6 +170,7 @@ impl Server {
         futures03::future::ready(result)
     }
 
+    /// Returns the address to which the server is bound.
     pub fn local_addr_immediate(&self) -> Result<SocketAddr> {
         match self.listener {
             Listener::Listening { .. } => self.listener.local_addr().map_err(Error::from),
@@ -185,9 +186,9 @@ impl Server {
 impl Future for Server {
     type Output = Result<()>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
-            let this = self.project();
+            let this = self.as_mut().project();
             match track!(this.listener.poll_next(cx)) {
                 Poll::Pending => {
                     break;
@@ -245,9 +246,9 @@ impl Listener {
 impl Stream for Listener {
     type Item = Result<(TcpStream, SocketAddr)>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         loop {
-            let next = match self.project() {
+            let next = match self.as_mut().project() {
                 ListenerProj::Binding(f, _) => {
                     if let Poll::Ready(listener) = track!(f.poll(cx).map_err(Error::from))? {
                         Listener::Listening(listener)
@@ -261,7 +262,7 @@ impl Stream for Listener {
                     )))
                 }
             };
-            *self = next;
+            self.set(next);
         }
         Poll::Pending
     }
@@ -282,12 +283,6 @@ impl std::fmt::Debug for Listener {
 
 #[derive(Debug)]
 struct TcpListenerWrapper(TcpListener);
-
-impl TcpListenerWrapper {
-    fn local_addr(&self) -> IOResult<SocketAddr> {
-        self.0.local_addr()
-    }
-}
 
 impl Stream for TcpListenerWrapper {
     type Item = IOResult<TcpStream>;

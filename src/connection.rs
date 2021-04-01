@@ -183,7 +183,7 @@ impl Connection {
             Phase::ReadRequestHead => self_mut.read_request_head(),
             Phase::DispatchRequest(req) => self_mut.dispatch_request(req),
             Phase::HandleRequest(handler) => self_mut.handle_request(handler),
-            Phase::PollReply(reply) => {
+            Phase::PollReply(mut reply) => {
                 if let Some(res_encoder) = Self::poll_reply(Pin::new(&mut reply), cx) {
                     Phase::WriteResponse(res_encoder)
                 } else {
