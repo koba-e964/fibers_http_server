@@ -1,38 +1,25 @@
-extern crate bytecodec;
-extern crate fibers;
-extern crate fibers_http_server;
-extern crate futures;
-extern crate httpcodec;
-extern crate slog;
-extern crate sloggers;
-#[macro_use]
-extern crate trackable;
-
 use bytecodec::bytes::Utf8Encoder;
 use bytecodec::null::NullDecoder;
-use fibers::{Executor, Spawn, ThreadPoolExecutor};
 use fibers_http_server::metrics::{MetricsHandler, WithMetrics};
 use fibers_http_server::{HandleRequest, Reply, Req, Res, ServerBuilder, Status};
-use futures::future::ok;
 use httpcodec::{BodyDecoder, BodyEncoder};
 use sloggers::terminal::TerminalLoggerBuilder;
 use sloggers::types::Severity;
 use sloggers::Build;
+use trackable::{track, track_any_err, track_try_unwrap};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let logger = track_try_unwrap!(TerminalLoggerBuilder::new().level(Severity::Debug).build());
-    let mut executor = track_try_unwrap!(track_any_err!(ThreadPoolExecutor::new()));
 
     let addr = "0.0.0.0:3100".parse().unwrap();
     let mut builder = ServerBuilder::new(addr);
     builder.logger(logger);
     track_try_unwrap!(builder.add_handler(WithMetrics::new(Hello)));
     track_try_unwrap!(builder.add_handler(MetricsHandler));
-    let server = builder.finish(executor.handle());
+    let server = builder.finish();
 
-    let fiber = executor.spawn_monitor(server);
-    let result = track_try_unwrap!(track_any_err!(executor.run_fiber(fiber)));
-    track_try_unwrap!(track_any_err!(result));
+    track_try_unwrap!(track_any_err!(server.await));
 }
 
 struct Hello;
@@ -47,6 +34,9 @@ impl HandleRequest for Hello {
     type Reply = Reply<Self::ResBody>;
 
     fn handle_request(&self, _req: Req<Self::ReqBody>) -> Self::Reply {
-        Box::new(ok(Res::new(Status::Ok, "hello".to_owned())))
+        Box::new(futures03::future::ready(Res::new(
+            Status::Ok,
+            "hello".to_owned(),
+        )))
     }
 }
