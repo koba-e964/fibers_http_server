@@ -6,7 +6,7 @@ use httpcodec::{BodyDecoder, BodyEncoder};
 use sloggers::terminal::TerminalLoggerBuilder;
 use sloggers::types::Severity;
 use sloggers::Build;
-use trackable::{track, track_any_err, track_try_unwrap};
+use trackable::{track_any_err, track_try_unwrap};
 
 #[tokio::main]
 async fn main() {
