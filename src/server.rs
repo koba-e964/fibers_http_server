@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::runtime::Handle;
 
 /// HTTP server builder.
 #[derive(Debug)]
@@ -120,7 +121,7 @@ impl ServerBuilder {
     }
 
     /// Builds a HTTP server with the given settings.
-    pub fn finish(self) -> Server {
+    pub fn finish(self, handle: Handle) -> Server {
         let logger = self.logger.new(o!("server" => self.bind_addr.to_string()));
 
         info!(logger, "Starts HTTP server");
@@ -133,6 +134,7 @@ impl ServerBuilder {
             is_server_alive: Arc::new(AtomicBool::new(true)),
             options: self.options,
             connected: Vec::new(),
+            handle,
         }
     }
 }
@@ -152,6 +154,7 @@ pub struct Server {
     is_server_alive: Arc<AtomicBool>,
     options: ServerOptions,
     connected: Vec<(SocketAddr, Compat<TcpStream>)>,
+    handle: Handle,
 }
 impl Server {
     /// Returns a future that retrieves the address to which the server is bound.
@@ -206,7 +209,7 @@ impl Future for Server {
                         Arc::clone(&this.is_server_alive),
                         &this.options,
                     ))?;
-                    tokio::spawn(future);
+                    this.handle.spawn(future);
                 }
             }
         }

@@ -12,6 +12,7 @@
 //! use fibers_http_server::{HandleRequest, Reply, Req, Res, ServerBuilder, Status};
 //! use futures03::future::Future;
 //! use httpcodec::{BodyDecoder, BodyEncoder};
+//! use tokio::runtime::Handle;
 //!
 //! // Request handler
 //! struct Hello;
@@ -38,7 +39,7 @@
 //! tokio::spawn({
 //!     let mut builder = ServerBuilder::new(addr);
 //!     builder.add_handler(Hello).unwrap();
-//!     let server = builder.finish();
+//!     let server = builder.finish(Handle::current());
 //!     server
 //! });
 //! thread::sleep(Duration::from_millis(100));
@@ -117,9 +118,11 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn it_works() {
+        use tokio::runtime::Handle;
+
         let mut builder = ServerBuilder::new(([127, 0, 0, 1], 12341).into());
         builder.add_handler(Hello).unwrap();
-        let server = builder.finish();
+        let server = builder.finish(Handle::current());
         let addr = server.local_addr_immediate().unwrap();
         tokio::spawn(server);
         thread::sleep(Duration::from_millis(100));

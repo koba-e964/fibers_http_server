@@ -24,6 +24,7 @@ use bytecodec::value::NullDecoder;
 use fibers_http_server::{HandleRequest, Reply, Req, Res, ServerBuilder, Status};
 use futures03::future::Future;
 use httpcodec::{BodyDecoder, BodyEncoder};
+use tokio::runtime::Handle;
 
 // Request handler
 struct Hello;
@@ -50,7 +51,7 @@ let addr = "127.0.0.1:14758".parse().unwrap();
 tokio::spawn({
     let mut builder = ServerBuilder::new(addr);
     builder.add_handler(Hello).unwrap();
-    let server = builder.finish();
+    let server = builder.finish(Handle::current());
     server
 });
 thread::sleep(Duration::from_millis(100));

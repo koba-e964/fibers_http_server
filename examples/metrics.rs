@@ -1,5 +1,6 @@
 use fibers_http_server::metrics::MetricsHandler;
 use fibers_http_server::ServerBuilder;
+use tokio::runtime::Handle;
 use trackable::result::MainResult;
 use trackable::track;
 
@@ -9,7 +10,7 @@ async fn main() -> MainResult {
     let mut builder = ServerBuilder::new(addr);
     track!(builder.add_handler(MetricsHandler))?;
 
-    let server = builder.finish();
+    let server = builder.finish(Handle::current());
     track!(server.await)?;
     Ok(())
 }

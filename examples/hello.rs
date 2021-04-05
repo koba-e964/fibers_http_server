@@ -6,6 +6,7 @@ use httpcodec::{BodyDecoder, BodyEncoder};
 use sloggers::terminal::TerminalLoggerBuilder;
 use sloggers::types::Severity;
 use sloggers::Build;
+use tokio::runtime::Handle;
 use trackable::{track_any_err, track_try_unwrap};
 
 #[tokio::main]
@@ -17,7 +18,7 @@ async fn main() {
     builder.logger(logger);
     track_try_unwrap!(builder.add_handler(WithMetrics::new(Hello)));
     track_try_unwrap!(builder.add_handler(MetricsHandler));
-    let server = builder.finish();
+    let server = builder.finish(Handle::current());
 
     track_try_unwrap!(track_any_err!(server.await));
 }
