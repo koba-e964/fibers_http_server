@@ -129,7 +129,7 @@ impl ServerBuilder {
         Server {
             logger,
             metrics: ServerMetrics::new(self.metrics),
-            listener: Listener::Binding(Box::new(fut03.map_err(Error::from)), self.bind_addr),
+            listener: Listener::Binding(Box::pin(fut03.map_err(Error::from)), self.bind_addr),
             dispatcher: self.dispatcher.finish(),
             is_server_alive: Arc::new(AtomicBool::new(true)),
             options: self.options,
@@ -227,7 +227,7 @@ impl PinnedDrop for Server {
 #[pin_project(project = ListenerProj)]
 enum Listener {
     Binding(
-        #[pin] Box<dyn Future<Output = Result<TcpListener>> + Send + Unpin + 'static>,
+        #[pin] futures03::future::BoxFuture<'static, Result<TcpListener>>,
         SocketAddr,
     ),
     Listening(#[pin] TcpListener),

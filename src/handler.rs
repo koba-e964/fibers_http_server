@@ -272,10 +272,10 @@ impl fmt::Debug for RequestHandlerFactory {
 }
 
 /// An alias of the typical `Future` that can be used as the result of `HandleRequest::handle_request` method.
-pub type Reply<T> = Box<dyn Future<Output = Res<T>> + Send + Unpin + 'static>;
+pub type Reply<T> = futures03::future::BoxFuture<'static, Res<T>>;
 
 #[pin_project]
-pub struct BoxReply(#[pin] Box<dyn Future<Output = ResEncoder> + Send + Unpin + 'static>);
+pub struct BoxReply(#[pin] futures03::future::BoxFuture<'static, ResEncoder>);
 impl BoxReply {
     fn new<F, H>(reply: F, encoder: H::Encoder) -> Self
     where
@@ -287,7 +287,7 @@ impl BoxReply {
             let encoder = ResponseEncoder::new(body_encoder).last(res.0);
             ResEncoder::new(encoder)
         });
-        BoxReply(Box::new(Box::pin(future)))
+        BoxReply(Box::pin(future))
     }
 }
 impl Future for BoxReply {

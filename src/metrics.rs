@@ -155,7 +155,7 @@ impl HandleRequest for MetricsHandler {
     type ResBody = String;
     type Decoder = BodyDecoder<NullDecoder>;
     type Encoder = BodyEncoder<Utf8Encoder>;
-    type Reply = Box<dyn Future<Output = Res<Self::ResBody>> + Send + Unpin + 'static>;
+    type Reply = futures03::future::BoxFuture<'static, Res<Self::ResBody>>;
 
     fn handle_request(&self, _req: Req<Self::ReqBody>) -> Self::Reply {
         let (tx, rx) = oneshot::channel();
@@ -169,10 +169,10 @@ impl HandleRequest for MetricsHandler {
             };
             let _ = tx.send(res);
         });
-        Box::new(Box::pin(async {
+        Box::pin(async {
             let result = rx.await;
             result.unwrap_or_else(|e| Res::new(Status::InternalServerError, e.to_string()))
-        }))
+        })
     }
 }
 
